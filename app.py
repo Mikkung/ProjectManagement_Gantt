@@ -3,138 +3,132 @@ import pandas as pd
 import plotly.express as px
 from datetime import date, timedelta
 
-# ตั้งค่าหน้าเว็บ
-st.set_page_config(page_title="My Project Manager V2", layout="wide")
-st.title("🚀 Interactive Project Manager")
+st.set_page_config(layout="wide", page_title="Expandable Gantt")
 
 # ---------------------------------------------------------
-# 1. DATA INITIALIZATION
+# 1. SETUP DATA (สร้างข้อมูลตัวอย่าง)
 # ---------------------------------------------------------
 if "data" not in st.session_state:
-    default_data = {
-        "Project": ["Website Redesign", "Website Redesign", "Mobile App", "Mobile App"],
-        "Task": ["Frontend", "Frontend", "Backend", "Backend"],
-        "Subtask": ["Homepage Design", "About Page", "API Setup", "Database Config"],
-        "Start Date": [date.today(), date.today() + timedelta(days=2), date.today(), date.today() + timedelta(days=3)],
-        "Due Date": [date.today() + timedelta(days=5), date.today() + timedelta(days=6), date.today() + timedelta(days=7), date.today() + timedelta(days=8)],
-        "Priority": ["High", "Medium", "High", "Critical"],
-        "Status": ["In Progress", "Not Started", "In Progress", "Blocked"],
-        "Assigned To": ["Dev A", "Dev A", "Dev B", "Dev B"]
-    }
-    st.session_state.data = pd.DataFrame(default_data)
-
-# แปลงข้อมูลวันที่ให้ถูกต้องเสมอ
-st.session_state.data["Start Date"] = pd.to_datetime(st.session_state.data["Start Date"])
-st.session_state.data["Due Date"] = pd.to_datetime(st.session_state.data["Due Date"])
-
-# ---------------------------------------------------------
-# 2. SIDEBAR CONTROLS (ตัวควบคุมการแสดงผล)
-# ---------------------------------------------------------
-st.sidebar.header("⚙️ Display Settings")
-
-# 2.1 Filter by Project
-unique_projects = st.session_state.data["Project"].unique()
-selected_projects = st.sidebar.multiselect(
-    "Filter by Project", 
-    options=unique_projects, 
-    default=unique_projects
-)
-
-# 2.2 Filter by Status
-unique_status = st.session_state.data["Status"].unique()
-selected_status = st.sidebar.multiselect(
-    "Filter by Status",
-    options=unique_status,
-    default=unique_status
-)
-
-# 2.3 Toggle View Mode (เปิด/ปิด Subtask)
-st.sidebar.divider()
-show_subtasks = st.sidebar.toggle("Show Subtasks (Expand Details)", value=True)
+    data = [
+        # Project 1: Website
+        {"Task": "Website Redesign", "Subtask": "Design UI", "Start": date.today(), "End": date.today() + timedelta(days=5), "Status": "In Progress"},
+        {"Task": "Website Redesign", "Subtask": "Develop Backend", "Start": date.today() + timedelta(days=3), "End": date.today() + timedelta(days=10), "Status": "Not Started"},
+        {"Task": "Website Redesign", "Subtask": "Testing", "Start": date.today() + timedelta(days=9), "End": date.today() + timedelta(days=12), "Status": "Not Started"},
+        
+        # Project 2: Mobile App
+        {"Task": "Mobile App", "Subtask": "Setup Flutter", "Start": date.today(), "End": date.today() + timedelta(days=3), "Status": "Done"},
+        {"Task": "Mobile App", "Subtask": "API Integration", "Start": date.today() + timedelta(days=2), "End": date.today() + timedelta(days=7), "Status": "In Progress"},
+    ]
+    st.session_state.data = pd.DataFrame(data)
+    # แปลงเป็น datetime
+    st.session_state.data["Start"] = pd.to_datetime(st.session_state.data["Start"])
+    st.session_state.data["End"] = pd.to_datetime(st.session_state.data["End"])
 
 # ---------------------------------------------------------
-# 3. DATA PROCESSING
+# 2. STATE MANAGEMENT (จัดการสถานะการเปิด/ปิด)
 # ---------------------------------------------------------
+# สร้าง DataFrame สำหรับควบคุมการ Expand (มี 1 แถวต่อ 1 Task หลัก)
+unique_tasks = st.session_state.data["Task"].unique()
 
-# กรองข้อมูลตามที่เลือกใน Sidebar
-filtered_df = st.session_state.data.copy()
-filtered_df = filtered_df[filtered_df["Project"].isin(selected_projects)]
-filtered_df = filtered_df[filtered_df["Status"].isin(selected_status)]
+if "task_states" not in st.session_state:
+    # สร้าง dict เก็บสถานะว่า Task ไหนเปิดอยู่บ้าง (True/False)
+    st.session_state.task_states = {task: False for task in unique_tasks}
 
-# Logic การแสดงผล (Expand vs Collapse)
-if show_subtasks:
-    # --- กรณีแสดง Subtasks (ละเอียด) ---
-    plot_data = filtered_df.copy()
-    # สร้าง label ใหม่ให้แกน Y แสดงชื่อ Task คู่กับ Subtask
-    plot_data["Y_Label"] = plot_data["Task"] + " : " + plot_data["Subtask"]
-    y_axis_col = "Y_Label"
-    color_col = "Status"
-    title_text = "Detailed View (Subtasks)"
-else:
-    # --- กรณีปิด Subtasks (รวมกลุ่ม) ---
-    # Group ข้อมูลตาม Task หลัก และหา Start ต่ำสุด และ Due สูงสุด
-    plot_data = filtered_df.groupby(["Project", "Task"], as_index=False).agg({
-        "Start Date": "min",
-        "Due Date": "max",
-        "Status": "first", # เอาสถานะของงานแรกมาโชว์ (หรือจะปรับ logic อื่นก็ได้)
-        "Assigned To": lambda x: ", ".join(set(x)) # รวมชื่อคนรับผิดชอบ
+# ---------------------------------------------------------
+# 3. LAYOUT แบ่ง 2 คอลัมน์
+# ---------------------------------------------------------
+st.title("📂 Interactive Expand/Collapse Gantt Chart")
+col_control, col_gantt = st.columns([1, 3]) # แบ่งสัดส่วน ซ้าย 1 : ขวา 3
+
+# --- LEFT COLUMN: CONTROL PANEL ---
+with col_control:
+    st.subheader("📌 Task List")
+    st.caption("Tick 'Show Sub' to expand in chart")
+    
+    # สร้าง DataFrame ชั่วคราวมาแสดงเป็นตารางควบคุม
+    control_df = pd.DataFrame({
+        "Task Name": unique_tasks,
+        "Show Sub": [st.session_state.task_states[t] for t in unique_tasks] # ดึงค่า True/False เดิมมาใส่
     })
-    y_axis_col = "Task"
-    color_col = "Project" # เปลี่ยนสีตาม Project แทน เพราะ Status อาจจะปนกัน
-    title_text = "High-Level View (Main Tasks Only)"
 
-# ---------------------------------------------------------
-# 4. MAIN INTERFACE
-# ---------------------------------------------------------
-
-# ส่วน Data Editor (ยังคงให้แก้ไขได้เฉพาะข้อมูลดิบ)
-with st.expander("📝 Edit Source Data", expanded=False):
-    column_config = {
-        "Start Date": st.column_config.DateColumn("Start Date", format="YYYY-MM-DD"),
-        "Due Date": st.column_config.DateColumn("Due Date", format="YYYY-MM-DD"),
-        "Priority": st.column_config.SelectboxColumn("Priority", options=["Critical", "High", "Medium", "Low"]),
-        "Status": st.column_config.SelectboxColumn("Status", options=["Not Started", "In Progress", "Done", "Blocked"]),
-    }
-    
-    edited_df = st.data_editor(
-        st.session_state.data,
-        num_rows="dynamic",
-        column_config=column_config,
-        use_container_width=True,
-        key="editor"
+    # แสดง Data Editor ให้ติ๊กถูกได้
+    edited_control = st.data_editor(
+        control_df,
+        column_config={
+            "Show Sub": st.column_config.CheckboxColumn("Expand", help="Show subtasks in Gantt", default=False)
+        },
+        disabled=["Task Name"], # ห้ามแก้ชื่อ
+        hide_index=True,
+        key="control_panel"
     )
-    # Save กลับเข้า Session
-    if not edited_df.equals(st.session_state.data):
-        st.session_state.data = edited_df
-        st.rerun() # รีเฟรชหน้าทันทีที่แก้ข้อมูล
 
-st.divider()
+    # Update State เมื่อมีการติ๊ก
+    for index, row in edited_control.iterrows():
+        task_name = row["Task Name"]
+        is_expanded = row["Show Sub"]
+        st.session_state.task_states[task_name] = is_expanded
 
-# ส่วนแสดงผล Gantt Chart
-st.subheader(f"📊 {title_text}")
+# --- RIGHT COLUMN: GANTT CHART LOGIC ---
+with col_gantt:
+    st.subheader("📊 Timeline")
 
-if not plot_data.empty:
-    # ตรวจสอบว่ามีข้อมูลวันที่ครบไหม
-    plot_data = plot_data.dropna(subset=["Start Date", "Due Date"])
+    # เตรียมข้อมูลที่จะพล็อต (Plot Data)
+    plot_rows = []
     
-    fig = px.timeline(
-        plot_data, 
-        x_start="Start Date", 
-        x_end="Due Date", 
-        y=y_axis_col,
-        color=color_col,
-        hover_data=plot_data.columns, # โชว์ข้อมูลทั้งหมดเมื่อเอาเมาส์ชี้
-        height=400 + (len(plot_data) * 20) # ปรับความสูงกราฟตามจำนวนงาน
-    )
-    
-    fig.update_yaxes(autorange="reversed", title="") # เรียงจากบนลงล่าง
-    fig.update_layout(
-        xaxis_title="Timeline",
-        showlegend=True,
-        # เพิ่มเส้นตารางให้อ่านง่ายขึ้น
-        xaxis=dict(showgrid=True, gridcolor='LightGrey', tickformat="%d %b"),
-    )
-    
-    st.plotly_chart(fig, use_container_width=True)
-else:
-    st.warning("No tasks found matching your filters.")
+    # วนลูปสร้างข้อมูลตามสถานะ Expand/Collapse
+    for task in unique_tasks:
+        task_data = st.session_state.data[st.session_state.data["Task"] == task]
+        
+        # 1. สร้างแถว "Main Task" (แถบสีเขียวแม่) เสมอ
+        start_min = task_data["Start"].min()
+        end_max = task_data["End"].max()
+        
+        plot_rows.append({
+            "Y_Label": f"<b>{task}</b>", # ตัวหนา
+            "Start": start_min,
+            "End": end_max,
+            "ColorGroup": "Main Task", # สีเขียว
+            "Details": f"Total Subtasks: {len(task_data)}"
+        })
+        
+        # 2. ถ้าถูกติ๊ก Expand -> ให้เพิ่มแถว "Subtasks" (แถบสีน้ำเงินลูก)
+        if st.session_state.task_states[task]:
+            for _, row in task_data.iterrows():
+                plot_rows.append({
+                    "Y_Label": f"&nbsp;&nbsp;&nbsp;&nbsp;↳ {row['Subtask']}", # ย่อหน้าเทียม
+                    "Start": row["Start"],
+                    "End": row["End"],
+                    "ColorGroup": "Subtask", # สีน้ำเงิน
+                    "Details": f"Status: {row['Status']}"
+                })
+
+    # สร้าง DataFrame สำหรับ Plotly
+    final_plot_df = pd.DataFrame(plot_rows)
+
+    # วาดกราฟ
+    if not final_plot_df.empty:
+        # กำหนดสีให้เหมือนรูป (แม่=เขียวอ่อน, ลูก=น้ำเงินเข้ม)
+        color_map = {"Main Task": "#90EE90", "Subtask": "#4682B4"} 
+        
+        fig = px.timeline(
+            final_plot_df,
+            x_start="Start",
+            x_end="End",
+            y="Y_Label",
+            color="ColorGroup",
+            color_discrete_map=color_map,
+            hover_data=["Details"],
+            height=400 + (len(final_plot_df) * 30) # ความสูง Dynamic
+        )
+        
+        fig.update_yaxes(autorange="reversed", title="") # เรียงบนลงล่าง
+        fig.update_layout(
+            xaxis_title="",
+            showlegend=False,
+            margin=dict(l=0, r=0, t=30, b=0),
+            xaxis=dict(showgrid=True, gridcolor='rgba(0,0,0,0.1)'), # เส้น Grid จางๆ
+        )
+        
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.info("No data to display")
